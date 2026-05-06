@@ -1,0 +1,46 @@
+body {
+    font-family: Arial;
+    margin: 20px;
+}
+
+.joke {
+    padding: 15px;
+    border-bottom: 1px solid #ddd;
+}
+
+.filters {
+    margin-bottom: 20px;
+}
+
+.tag {
+    display: inline-block;
+    padding: 4px 10px;
+    margin: 3px;
+    border-radius: 999px;
+    background-color: #e6f0ff;
+    color: #0066cc;
+    font-size: 12px;
+    text-decoration: none;
+}
+
+.tag:hover {
+    background-color: #cce0ff;
+}
+
+.controls {
+    margin-bottom: 20px;
+}
+
+button {
+    padding: 6px 12px;
+    cursor: pointer;
+}
+
+select {
+    padding: 5px;
+}
+
+#loading {
+    text-align: center;
+    padding: 20px;
+}

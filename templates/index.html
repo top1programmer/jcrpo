@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Анекдоты</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    </style>
+</head>
+<body>
+
+<h1>Анекдоты</h1>
+
+<!-- 🔹 ФИЛЬТРЫ -->
+<form method="get" class="filters">
+    <input type="date" name="date" value="{{ date or '' }}">
+    <input type="text" name="tag" placeholder="тег" value="{{ tag or '' }}">
+    <input type="text" name="search" placeholder="поиск" value="{{ search or '' }}">
+
+    <select name="sort">
+        <option value="top" {% if sort == 'top' %}selected{% endif %}>Топ</option>
+        <option value="new" {% if sort == 'new' %}selected{% endif %}>Новые</option>
+        <option value="random" {% if sort == 'random' %}selected{% endif %}>Случайные</option>
+    </select>
+
+    <button type="submit">Фильтр</button>
+</form>
+
+<!-- 🔹 RANDOM -->
+<div class="controls">
+    <button onclick="loadRandom()">Случайный анекдот 🎲</button>
+
+    <div id="random"></div>
+</div>
+
+<!-- 🔹 СПИСОК -->
+<div id="jokes">
+{% for j in jokes %}
+    <div class="joke">
+        <p>{{ j.text }}</p>
+
+        <div>
+            {% for t in j.tags %}
+                <a href="/?tag={{ t }}" class="tag">{{ t }}</a>
+            {% endfor %}
+        </div>
+
+        <small>
+            rating: {{ j.final_rating }} | date: {{ j.source_date }}
+        </small>
+    </div>
+{% endfor %}
+</div>
+
+<div id="loading" style="text-align:center; padding:20px;">
+    Загрузка...
+</div>
+
+<script>
+let page = 1;
+let loading = false;
+let hasNext = true;
+
+async function loadMore() {
+    if (loading || !hasNext) return;
+
+    loading = true;
+    page++;
+
+    const params = new URLSearchParams(window.location.search);
+    params.set("page", page);
+
+    const res = await fetch("/api/jokes?" + params.toString());
+    const data = await res.json();
+
+    const container = document.getElementById("jokes");
+
+data.jokes.forEach(j => {
+    const div = document.createElement("div");
+    div.className = "joke";
+
+    const tags = (j.tags || []).map(t =>
+        `<a href="/?tag=${t}" class="tag">${t}</a>`
+    ).join(" ");
+
+    div.innerHTML = `
+        <p>${j.text}</p>
+        <div>${tags}</div>
+        <small>
+            rating: ${j.final_rating || 0} |
+            date: ${j.source_date || ""}
+        </small>
+    `;
+
+    container.appendChild(div);
+});
+
+    hasNext = data.has_next;
+    loading = false;
+}
+
+window.addEventListener("scroll", () => {
+    if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 200) {
+        loadMore();
+    }
+});
+</script>
+
+<script>
+async function loadRandom() {
+    const res = await fetch("/random");
+    const data = await res.json();
+
+    const block = document.getElementById("random");
+
+    block.innerHTML = `
+        <div class="joke">
+            <p>${data.text}</p>
+        </div>
+    `;
+}
+</script>
+
+</body>
+</html>
