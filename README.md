@@ -6,20 +6,20 @@ JokeHub is a web application for storing, searching and managing jokes with supp
 # Useful links
 
 ## Requirements
-- [Software Requirements Specification](Documents/SRS.md)
-- [Mockups](Documents/Mockups)
+- [Software Requirements Specification](Documents/Requirements/SRS.md)
+- [Mockups](images)
 
 ## Design
 
 ### Part A
-- [Use Case Diagram](Documents/UML/UseCase)
-- [Activity Diagrams](Documents/UML/Activity)
-- [Sequence Diagrams](Documents/UML/Sequence)
+- [Use Case Diagram](Documents/SystemProject/UseCase)
+- [Activity Diagrams](Documents/SystemProject/Activity)
+- [Sequence Diagrams](Documents/SystemProject/Sequence)
 
 ### Part B
-- [State Diagram](Documents/UML/State)
-- [Class Diagram](Documents/UML/Class)
-- [Component and Deployment Diagram](Documents/UML/Deployment)
+- [State Diagram](Documents/SystemProject/State)
+- [Class Diagram](Documents/SystemProject/Class)
+- [Component and Deployment Diagram](Documents/SystemProject/Deployment)
 
 ---
 
