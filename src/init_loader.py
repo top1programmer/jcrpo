@@ -9,7 +9,7 @@ REQUEST_DELAY = 1
 
 def parse_range(start_date, end_date):
     current = start_date
-
+    
     while current <= end_date:
         date_str = current.strftime("%Y-%m-%d")
 
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     parser.add_argument("--end", required=True)
 
     args = parser.parse_args()
-
+    
     start = datetime.strptime(args.start, "%Y-%m-%d").date()
     end = datetime.strptime(args.end, "%Y-%m-%d").date()
 

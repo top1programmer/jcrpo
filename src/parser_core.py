@@ -16,8 +16,7 @@ BASE_URL = "https://www.anekdot.ru/release/anekdot/day/{}/"
 
 def init_db():
     conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-
+    cur = conn.cursor()    
     cur.execute("""
     CREATE TABLE IF NOT EXISTS jokes (
         id SERIAL PRIMARY KEY,
