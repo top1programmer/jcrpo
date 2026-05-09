@@ -1,14 +1,12 @@
 import psycopg2
-import re
 from collections import Counter
 from tqdm import tqdm
 
 import torch
-import numpy as np
-import spacy
-
 from sentence_transformers import SentenceTransformer
-from sklearn.cluster import DBSCAN
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.metrics.pairwise import cosine_similarity
+from natasha import Segmenter, NewsEmbedding, NewsMorphTagger, Doc
 
 # -------------------------
 # CONFIG
@@ -30,8 +28,13 @@ model = SentenceTransformer(
     device=device
 )
 
-# ⚠️ ВАЖНО: NER включён
-nlp = spacy.load("ru_core_news_sm")
+# -------------------------
+# NATASHA INIT
+# -------------------------
+
+segmenter = Segmenter()
+emb = NewsEmbedding()
+morph_tagger = NewsMorphTagger(emb)
 
 # -------------------------
 # STOPWORDS
@@ -39,7 +42,7 @@ nlp = spacy.load("ru_core_news_sm")
 
 STOPWORDS = {
     "это","как","что","в","на","и","а","но","за","его","ее","бы","же",
-    "ли","уже","он","она","они","мы","вы","я"
+    "ли","уже","он","она","они","мы","вы","я","к","у","с","по","из"
 }
 
 MIN_FREQ = 5
@@ -64,45 +67,50 @@ def load_jokes(limit=20000):
             return cur.fetchall()
 
 # -------------------------
-# EXTRACTION (FIXED)
+# NLP EXTRACTION (Natasha)
 # -------------------------
 
-def extract_entities(text):
-    doc = nlp(text)
-    return [ent.text.lower().strip() for ent in doc.ents]
+def extract_candidates(text):
+    doc = Doc(text)
+    doc.segment(segmenter)
+    doc.tag_morph(morph_tagger)
 
+    tokens = []
 
-def extract_noun_chunks(text):
-    doc = nlp(text.lower())
-    return [c.text.strip() for c in doc.noun_chunks]
+    for t in doc.tokens:
+        if t.pos in {"NOUN", "PROPN"}:
+            tokens.append(t.text.lower())
 
+    return tokens
 
-def clean_items(items):
+# -------------------------
+# CLEANING
+# -------------------------
+
+def clean(items):
     out = []
 
-    for p in items:
-        if not p:
+    for x in items:
+        if not x:
             continue
 
-        p = p.strip()
+        x = x.strip().lower()
 
-        if len(p) < 3:
+        if len(x) < 3:
             continue
 
-        words = p.split()
-
-        if any(w in STOPWORDS for w in words):
+        if any(w in STOPWORDS for w in x.split()):
             continue
 
-        if len(words) < 1:
+        if x.isdigit():
             continue
 
-        out.append(p)
+        out.append(x)
 
     return out
 
 # -------------------------
-# VOCAB BUILD (FIXED CORE)
+# VOCAB BUILD
 # -------------------------
 
 def build_vocab(jokes):
@@ -110,14 +118,10 @@ def build_vocab(jokes):
 
     for _, text in tqdm(jokes, desc="extracting"):
 
-        entities = extract_entities(text)
-        chunks = extract_noun_chunks(text)
+        candidates = extract_candidates(text)
+        candidates = clean(candidates)
 
-        candidates = entities + chunks
-
-        cleaned = clean_items(candidates)
-
-        counter.update(cleaned)
+        counter.update(candidates)
 
     vocab = [w for w, c in counter.items() if c >= MIN_FREQ]
 
@@ -126,37 +130,42 @@ def build_vocab(jokes):
     return vocab
 
 # -------------------------
-# EMBEDDINGS + CLUSTERING (optional improvement)
+# CLUSTERING
 # -------------------------
 
-def cluster_vocab(vocab):
-    if not vocab:
-        return {}
+def merge_tags(vocab, model, threshold=0.75):
+    emb = model.encode(vocab, normalize_embeddings=True)
 
-    emb = model.encode(
-        vocab,
-        convert_to_tensor=True,
-        device=device,
-        normalize_embeddings=True,
-        batch_size=256
-    )
+    sim_matrix = np.matmul(emb, emb.T)
 
-    emb_np = emb.cpu().numpy()
+    used = set()
+    clusters = []
 
-    clustering = DBSCAN(
-        eps=0.22,
-        min_samples=2,
-        metric="cosine"
-    ).fit(emb_np)
-
-    clusters = {}
-
-    for word, label in zip(vocab, clustering.labels_):
-        if label == -1:
+    for i in range(len(vocab)):
+        if i in used:
             continue
-        clusters.setdefault(label, []).append(word)
+
+        cluster = [vocab[i]]
+        used.add(i)
+
+        for j in range(i+1, len(vocab)):
+            if j in used:
+                continue
+
+            if sim_matrix[i][j] > threshold:
+                cluster.append(vocab[j])
+                used.add(j)
+
+        clusters.append(cluster)
 
     return clusters
+
+# -------------------------
+# TAG SELECTION
+# -------------------------
+
+def pick_tag(words):
+    return max(words, key=lambda w: (len(w), -w.count(" ")))
 
 # -------------------------
 # SAVE TAGS
@@ -168,12 +177,11 @@ def save_tags(clusters):
     with conn() as c:
         with c.cursor() as cur:
 
-            for words in clusters.values():
+            for words in clusters:
 
-                if len(words) < 2:
+                if len(words) < 1:
                     continue
 
-                # лучший представитель = самое длинное слово
                 main_tag = max(words, key=len)
 
                 cur.execute("""
@@ -192,7 +200,7 @@ def save_tags(clusters):
     return tag_map
 
 # -------------------------
-# ASSIGN TAGS TO JOKES
+# ASSIGN TAGS
 # -------------------------
 
 def assign(jokes, tag_map):
@@ -201,18 +209,16 @@ def assign(jokes, tag_map):
 
             for jid, text in tqdm(jokes, desc="assign"):
 
-                text_l = text.lower()
+                t = text.lower()
 
                 for tag_id, phrases in tag_map.items():
 
-                    for p in phrases:
-                        if p in text_l:
-                            cur.execute("""
-                                INSERT INTO joke_tags (joke_id, tag_id)
-                                VALUES (%s, %s)
-                                ON CONFLICT DO NOTHING
-                            """, (jid, tag_id))
-                            break
+                    if any(p in t for p in phrases):
+                        cur.execute("""
+                            INSERT INTO joke_tags (joke_id, tag_id)
+                            VALUES (%s, %s)
+                            ON CONFLICT DO NOTHING
+                        """, (jid, tag_id))
 
         c.commit()
 
@@ -227,7 +233,7 @@ def run():
     vocab = build_vocab(jokes)
 
     print("2. clustering")
-    clusters = cluster_vocab(vocab)
+    clusters = merge_tags(vocab, model)
 
     print("clusters:", len(clusters))
 
