@@ -1,12 +1,12 @@
 import psycopg2
 from collections import Counter
 from tqdm import tqdm
-
+import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity
-from natasha import Segmenter, NewsEmbedding, NewsMorphTagger, Doc
+from natasha import Segmenter, NewsEmbedding, NewsMorphTagger, Doc, MorphVocab
 
 # -------------------------
 # CONFIG
@@ -35,6 +35,7 @@ model = SentenceTransformer(
 segmenter = Segmenter()
 emb = NewsEmbedding()
 morph_tagger = NewsMorphTagger(emb)
+morph_vocab = MorphVocab()
 
 # -------------------------
 # STOPWORDS
@@ -70,6 +71,17 @@ def load_jokes(limit=20000):
 # NLP EXTRACTION (Natasha)
 # -------------------------
 
+def normalize_word(word):
+    doc = Doc(word)
+    doc.segment(segmenter)
+    doc.tag_morph(morph_tagger)
+
+    for t in doc.tokens:
+        t.lemmatize(morph_vocab)
+        return t.lemma
+
+    return word
+
 def extract_candidates(text):
     doc = Doc(text)
     doc.segment(segmenter)
@@ -95,7 +107,8 @@ def clean(items):
             continue
 
         x = x.strip().lower()
-
+        
+        x = normalize_word(x)
         if len(x) < 3:
             continue
 
@@ -133,28 +146,33 @@ def build_vocab(jokes):
 # CLUSTERING
 # -------------------------
 
-def merge_tags(vocab, model, threshold=0.75):
+def merge_tags(vocab, model, threshold=0.82):
     emb = model.encode(vocab, normalize_embeddings=True)
+    emb = np.array(emb)
 
-    sim_matrix = np.matmul(emb, emb.T)
+    sim = cosine_similarity(emb)
 
-    used = set()
+    n = len(vocab)
+    visited = set()
     clusters = []
 
-    for i in range(len(vocab)):
-        if i in used:
+    for i in range(n):
+        if i in visited:
             continue
 
-        cluster = [vocab[i]]
-        used.add(i)
+        cluster = []
+        stack = [i]
+        visited.add(i)
 
-        for j in range(i+1, len(vocab)):
-            if j in used:
-                continue
+        # DFS по графу похожести
+        while stack:
+            node = stack.pop()
+            cluster.append(vocab[node])
 
-            if sim_matrix[i][j] > threshold:
-                cluster.append(vocab[j])
-                used.add(j)
+            for j in range(n):
+                if j not in visited and sim[node][j] >= threshold:
+                    visited.add(j)
+                    stack.append(j)
 
         clusters.append(cluster)
 
@@ -182,7 +200,7 @@ def save_tags(clusters):
                 if len(words) < 1:
                     continue
 
-                main_tag = max(words, key=len)
+                main_tag = pick_tag(words)
 
                 cur.execute("""
                     INSERT INTO tags (name)
