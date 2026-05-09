@@ -1,141 +1,162 @@
 #db.py
 import psycopg2
 import bcrypt
+from sqlalchemy import create_engine, desc, func
+from sqlalchemy.orm import sessionmaker
+from src.models import *
 
-DB_CONFIG = {
-    "dbname": "jokes",
-    "user": "postgres",
-    "password": "postgres",
-    "host": "localhost",
-    "port": 5433
-}
+
+DATABASE_URL = "postgresql+psycopg2://postgres:postgres@localhost:5433/jokes"
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True
+)
+
+Session = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False
+)
+
+
+def get_db():
+    db = Session()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def get_conn():
     return psycopg2.connect(**DB_CONFIG)
 
 
-def fetch_jokes(limit, offset, date=None, tag=None, search=None, sort=None):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    query = """
-        SELECT
-            j.id,
-            j.text,
-            j.source_date,
-            j.final_rating,
-            COALESCE((
-                SELECT array_agg(t.name)
-                FROM joke_tags jt
-                JOIN tags t ON t.id = jt.tag_id
-                WHERE jt.joke_id = j.id
-            ), '{}') AS tags
-        FROM jokes_with_rating j
-        WHERE 1=1
-    """
-
-    params = []
+def fetch_jokes(db, limit, offset, date=None, tag=None, search=None, sort=None):
+    query = db.query(Joke)
 
     if date:
-        query += " AND j.source_date = %s"
-        params.append(date)
+        query = query.filter(Joke.source_date == date)
 
     if search:
-        query += " AND j.text ILIKE %s"
-        params.append(f"%{search}%")
+        query = query.filter(Joke.text.ilike(f"%{search}%"))
 
     if tag:
-        query += """
-            AND EXISTS (
-                SELECT 1 FROM joke_tags jt2
-                JOIN tags t2 ON t2.id = jt2.tag_id
-                WHERE jt2.joke_id = j.id
-                AND t2.name ILIKE %s
-            )
-        """
-        params.append(f"%{tag}%")
+        query = query.join(Joke.tags).filter(Tag.name.ilike(f"%{tag}%"))
 
-    # сортировка
     if sort == "rating":
-        query += " ORDER BY j.final_rating DESC NULLS LAST"
+        query = query.order_by(desc(Joke.avg_rating))
     elif sort == "date":
-        query += " ORDER BY j.source_date DESC NULLS LAST"
+        query = query.order_by(desc(Joke.source_date))
     elif sort == "random":
-        query += " ORDER BY random()"
+        query = query.order_by(func.random())
+    elif sort == "new":
+        query = query.order_by(desc(Joke.created_at))
     else:
-        query += " ORDER BY j.id DESC"
+        query = query.order_by(desc(Joke.id))
 
-    query += " LIMIT %s OFFSET %s"
-    params.extend([limit, offset])
+    return query.offset(offset).limit(limit).all()
 
-    cur.execute(query, params)
-
-    columns = [desc[0] for desc in cur.description]
-
-    rows = [dict(zip(columns, row)) for row in cur.fetchall()]
-
-    cur.close()
-    conn.close()
-
-    return rows
-
-def create_user(username, password):
-    conn = get_conn()
-    cur = conn.cursor()
-
+def create_user(db: Session, username: str, password: str):
     password_hash = bcrypt.hashpw(
         password.encode(),
         bcrypt.gensalt()
     ).decode()
 
-    cur.execute("""
-        INSERT INTO users (username, password_hash, role)
-        VALUES (%s, %s, 'user')
-        RETURNING id
-    """, (username, password_hash))
+    user = User(
+        username=username,
+        password_hash=password_hash,
+        role="user"
+    )
 
-    user_id = cur.fetchone()[0]
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
-    return user_id
+    return user.id
 
 
-def get_user_by_username(username):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, username, password_hash, role
-        FROM users
-        WHERE username = %s
-    """, (username,))
-
-    row = cur.fetchone()
-
-    cur.close()
-    conn.close()
-
-    return row
+def get_user_by_username(db: Session, username: str):
+    return db.query(User).filter(User.username == username).first()
 
 
-def verify_user(username, password):
-    user = get_user_by_username(username)
+def verify_user(db: Session, username: str, password: str):
+    user = db.query(User).filter(User.username == username).first()
 
     if not user:
         return None
 
-    user_id, username, password_hash, role = user
-
-    if bcrypt.checkpw(password.encode(),password_hash.encode()):
+    if bcrypt.checkpw(password.encode(), user.password_hash.encode()):
         return {
-            "id": user_id,
-            "username": username,
-            "role": role
+            "id": user.id,
+            "username": user.username,
+            "role": user.role
         }
 
     return None
+
+
+def create_joke(db: Session, text: str, author_id: int):
+    joke = Joke(
+        text=text,
+        author_id=author_id,
+        avg_rating=0,
+        ratings_count=0
+    )
+
+    db.add(joke)
+    db.commit()
+    db.refresh(joke)
+
+    return joke
+
+
+def get_joke(db, joke_id):
+    return db.query(Joke).filter(Joke.id == joke_id).first()
+
+def update_joke(db, joke_id, text):
+    joke = db.query(Joke).filter(Joke.id == joke_id).first()
+
+    if joke:
+        joke.text = text
+        db.commit()
+
+def delete_joke_db(db, joke_id):
+    db.query(Joke).filter(Joke.id == joke_id).delete()
+    db.commit()
+
+def get_or_create_tag(db: Session, name: str):
+    tag = db.query(Tag).filter(Tag.name == name).first()
+
+    if tag:
+        return tag
+
+    tag = Tag(name=name)
+    db.add(tag)
+    db.commit()
+    db.refresh(tag)
+
+    return tag
+
+def add_tag_to_joke(db: Session, joke_id: int, tag_name: str):
+    joke = db.query(Joke).filter(Joke.id == joke_id).first()
+    tag = get_or_create_tag(db, tag_name)
+
+    if joke and tag and tag not in joke.tags:
+        joke.tags.append(tag)
+        db.commit()
+
+def get_random_joke(db: Session):
+    return db.query(Joke).order_by(func.random()).first()
+
+
+def get_random_joke_by_tag(db: Session, tag_name: str):
+    return (
+        db.query(Joke)
+        .join(Joke.tags)
+        .filter(Tag.name.ilike(f"%{tag_name}%"))
+        .order_by(func.random())
+        .first()
+    )

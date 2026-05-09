@@ -1,20 +1,22 @@
-
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+#main.py
+from fastapi import FastAPI, Request, Form, Depends
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
-from src.db import (
-    fetch_jokes,
-    get_conn,
-    create_user,
-    verify_user
-)
-from psycopg2.errors import UniqueViolation
-from psycopg2 import IntegrityError
+from sqlalchemy.orm import Session
+from src.db import *
+import asyncio
+from contextlib import asynccontextmanager
+from src.bot import start_bot
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(start_bot())
+    yield
+
+app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="src/static"), name="static")
 templates = Jinja2Templates(directory="src/templates")
 
@@ -30,14 +32,13 @@ def index(
     date: str = None,
     tag: str = None,
     search: str = None,
-    sort: str = "top"
+    sort: str = "top",
+    db: Session = Depends(get_db)
 ):
     limit = 20
     offset = (page - 1) * limit
 
-    jokes = fetch_jokes(limit, offset, date, tag, search, sort)
-
-    user = request.session.get("user")
+    jokes = fetch_jokes(db, limit, offset, date, tag, search, sort)
 
     return templates.TemplateResponse(
         request=request,
@@ -49,10 +50,9 @@ def index(
             "tag": tag,
             "search": search,
             "sort": sort,
-            "user": user
+            "user": request.session.get("user")
         }
     )
-
 
 @app.get("/register")
 def register_page(request: Request):
@@ -67,25 +67,24 @@ def register_page(request: Request):
 def register(
     request: Request,
     username: str = Form(...),
-    password: str = Form(...)
+    password: str = Form(...),
+    db: Session = Depends(get_db)
 ):
     try:
-        create_user(username, password)
+        create_user(db, username, password)
 
-        return RedirectResponse(
-            url="/login",
-            status_code=303
-        )
+        return RedirectResponse("/login", status_code=303)
 
-    except IntegrityError:
+    except Exception:
         return templates.TemplateResponse(
             request=request,
             name="register.html",
-            context={
+            context=            
+            {
+                "request": request,
                 "error": "Пользователь уже существует"
             }
         )
-
 
 @app.get("/login")
 def login_page(request: Request):
@@ -100,41 +99,44 @@ def login_page(request: Request):
 def login(
     request: Request,
     username: str = Form(...),
-    password: str = Form(...)
+    password: str = Form(...),
+    db: Session = Depends(get_db)
 ):
-    user = verify_user(username, password)
+    user = verify_user(db, username, password)
 
     if not user:
         return templates.TemplateResponse(
             request=request,
             name="login.html",
-            context={
+            context=            
+            {
+                "request": request,
                 "error": "Неверный логин или пароль"
             }
         )
 
     request.session["user"] = user
 
-    return RedirectResponse(
-        url="/",
-        status_code=303
-    )
+    return RedirectResponse("/", status_code=303)
 
 @app.get("/logout")
 def logout(request: Request):
     request.session.clear()
-
-    return RedirectResponse(
-        url="/",
-        status_code=303
-    )
+    return RedirectResponse("/", status_code=303)
 
 @app.get("/api/jokes")
-def api_jokes(page: int = 1, date: str = None, tag: str = None, search: str = None, sort: str = "top"):
+def api_jokes(
+    page: int = 1,
+    date: str = None,
+    tag: str = None,
+    search: str = None,
+    sort: str = "top",
+    db: Session = Depends(get_db)
+):
     limit = 20
     offset = (page - 1) * limit
 
-    jokes = fetch_jokes(limit + 1, offset, date, tag, search, sort)
+    jokes = fetch_jokes(db, limit + 1, offset, date, tag, search, sort)
 
     has_next = len(jokes) > limit
     jokes = jokes[:limit]
@@ -145,20 +147,88 @@ def api_jokes(page: int = 1, date: str = None, tag: str = None, search: str = No
     }
 
 @app.get("/random")
-def random_joke():
-    conn = get_conn()
-    cur = conn.cursor()
+def random_joke(db: Session = Depends(get_db)):
+    joke = db.query(Joke).order_by(func.random()).first()
 
-    cur.execute("""
-        SELECT j.text
-        FROM jokes j
-        ORDER BY random()
-        LIMIT 1
-    """)
+    return {"text": joke.text if joke else ""}
 
-    joke = cur.fetchone()
+@app.get("/jokes/create")
+def create_joke_page(request: Request):
+    if not request.session.get("user"):
+        return RedirectResponse("/login", status_code=303)
 
-    cur.close()
-    conn.close()
+    return templates.TemplateResponse(
+        request=request,
+        name="create_joke.html",
+        context=             
+        {"request": request}
+    )
 
-    return {"text": joke[0] if joke else ""}
+@app.post("/jokes/create")
+def create_joke_action(
+    request: Request,
+    text: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    user = request.session.get("user")
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    create_joke(db, text, user["id"])
+
+    return RedirectResponse("/", status_code=303)
+
+@app.get("/jokes/{joke_id}/edit")
+def edit_joke_page(
+    request: Request,
+    joke_id: int,
+    db: Session = Depends(get_db)
+):
+    user = request.session.get("user")
+
+    if not user or user["role"] != "moderator":
+        return RedirectResponse("/", status_code=303)
+
+    joke = get_joke(db, joke_id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="edit_joke.html",
+        context=                 
+        {
+            "request": request,
+            "joke": joke
+        }
+    )
+
+@app.post("/jokes/{joke_id}/edit")
+def edit_joke_action(
+    request: Request,
+    joke_id: int,
+    text: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    user = request.session.get("user")
+
+    if not user or user["role"] != "moderator":
+        return RedirectResponse("/", status_code=303)
+
+    update_joke(db, joke_id, text)
+
+    return RedirectResponse("/", status_code=303)
+
+@app.post("/jokes/{joke_id}/delete")
+def delete_joke(
+    request: Request,
+    joke_id: int,
+    db: Session = Depends(get_db)
+):
+    user = request.session.get("user")
+
+    if not user or user["role"] != "moderator":
+        return RedirectResponse("/", status_code=303)
+
+    delete_joke_db(db, joke_id)
+
+    return RedirectResponse("/", status_code=303)

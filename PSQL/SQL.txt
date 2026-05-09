@@ -130,3 +130,25 @@ CREATE TABLE joke_entities (
 CREATE EXTENSION IF NOT EXISTS vector;
 
 select version();
+
+
+
+
+ALTER TABLE users
+ADD COLUMN username VARCHAR(64) UNIQUE,
+ADD COLUMN password_hash TEXT,
+ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'guest';
+
+
+select  * from users;
+
+SELECT 
+    table_schema,
+    table_name, 
+    column_name,
+    ordinal_position as pos,
+    data_type,
+    is_nullable
+FROM information_schema.columns
+WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+ORDER BY table_schema, table_name, ordinal_position;
