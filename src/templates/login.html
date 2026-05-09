@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login</title>
+    <link rel="stylesheet" href="/static/auth.css">
+</head>
+<body>
+
+<div class="auth-container">
+
+    <h1>Вход</h1>
+
+    {% if error %}
+        <div class="error">
+            {{ error }}
+        </div>
+    {% endif %}
+
+    <form method="post">
+
+        <input
+            type="text"
+            name="username"
+            placeholder="Логин"
+            required
+        >
+
+        <input
+            type="password"
+            name="password"
+            placeholder="Пароль"
+            required
+        >
+
+        <button type="submit">
+            Войти
+        </button>
+
+    </form>
+
+    <a href="/register">
+        Регистрация
+    </a>
+
+</div>
+
+</body>
+</html>

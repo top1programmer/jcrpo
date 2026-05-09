@@ -1,27 +1,43 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from db import fetch_jokes, get_conn
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+from src.db import (
+    fetch_jokes,
+    get_conn,
+    create_user,
+    verify_user
+)
+from psycopg2.errors import UniqueViolation
+from psycopg2 import IntegrityError
 
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="src/static"), name="static")
+templates = Jinja2Templates(directory="src/templates")
 
-# @app.get("/", response_class=HTMLResponse)
-# def index(request: Request):
-#     return templates.TemplateResponse(
-#         request=request,
-#         name="index.html",
-#         context={}
-#     )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key="super-secret-key"
+)
+
 @app.get("/")
-def index(request: Request, page: int = 1, date: str = None, tag: str = None, search: str = None, sort: str = "top"):
+def index(
+    request: Request,
+    page: int = 1,
+    date: str = None,
+    tag: str = None,
+    search: str = None,
+    sort: str = "top"
+):
     limit = 20
     offset = (page - 1) * limit
 
     jokes = fetch_jokes(limit, offset, date, tag, search, sort)
+
+    user = request.session.get("user")
 
     return templates.TemplateResponse(
         request=request,
@@ -32,8 +48,85 @@ def index(request: Request, page: int = 1, date: str = None, tag: str = None, se
             "date": date,
             "tag": tag,
             "search": search,
-            "sort": sort
+            "sort": sort,
+            "user": user
         }
+    )
+
+
+@app.get("/register")
+def register_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="register.html",
+        context={"error": None}
+    )
+
+
+@app.post("/register")
+def register(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...)
+):
+    try:
+        create_user(username, password)
+
+        return RedirectResponse(
+            url="/login",
+            status_code=303
+        )
+
+    except IntegrityError:
+        return templates.TemplateResponse(
+            request=request,
+            name="register.html",
+            context={
+                "error": "Пользователь уже существует"
+            }
+        )
+
+
+@app.get("/login")
+def login_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"error": None}
+    )
+
+
+@app.post("/login")
+def login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...)
+):
+    user = verify_user(username, password)
+
+    if not user:
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={
+                "error": "Неверный логин или пароль"
+            }
+        )
+
+    request.session["user"] = user
+
+    return RedirectResponse(
+        url="/",
+        status_code=303
+    )
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+
+    return RedirectResponse(
+        url="/",
+        status_code=303
     )
 
 @app.get("/api/jokes")

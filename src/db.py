@@ -1,4 +1,6 @@
+#db.py
 import psycopg2
+import bcrypt
 
 DB_CONFIG = {
     "dbname": "jokes",
@@ -77,3 +79,63 @@ def fetch_jokes(limit, offset, date=None, tag=None, search=None, sort=None):
     conn.close()
 
     return rows
+
+def create_user(username, password):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    password_hash = bcrypt.hashpw(
+        password.encode(),
+        bcrypt.gensalt()
+    ).decode()
+
+    cur.execute("""
+        INSERT INTO users (username, password_hash, role)
+        VALUES (%s, %s, 'user')
+        RETURNING id
+    """, (username, password_hash))
+
+    user_id = cur.fetchone()[0]
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return user_id
+
+
+def get_user_by_username(username):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, username, password_hash, role
+        FROM users
+        WHERE username = %s
+    """, (username,))
+
+    row = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    return row
+
+
+def verify_user(username, password):
+    user = get_user_by_username(username)
+
+    if not user:
+        return None
+
+    user_id, username, password_hash, role = user
+
+    if bcrypt.checkpw(password.encode(),password_hash.encode()):
+        return {
+            "id": user_id,
+            "username": username,
+            "role": role
+        }
+
+    return None
