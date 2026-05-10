@@ -81,7 +81,9 @@
 
                 <div>
                     {% for t in j.tags %}
-                    <a href="/?tag={{ t }}" class="tag">{{ t }}</a>
+                    <a href="/?tag={{ t.name }}" class="tag">
+                        {{ t.name }}
+                    </a>
                     {% endfor %}
                 </div>
 
@@ -147,10 +149,10 @@
                 data.jokes.forEach(j => {
                     const div = document.createElement("div");
                     div.className = "joke";
-
-                    const tags = (j.tags || []).map(t =>
-                        `<a href="/?tag=${t}" class="tag">${t}</a>`
-                    ).join(" ");
+                    
+                const tags = (j.tags || []).map(t =>
+                    `<a href="/?tag=${t.name}" class="tag">${t.name}</a>`
+                ).join(" ");
 
                     div.innerHTML = `
         <p>${escapeHtml(j.text)}</p>
