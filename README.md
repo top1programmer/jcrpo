@@ -12,8 +12,8 @@ JokeHub is a web application for storing, searching and managing jokes with supp
 ## Design
 
 ### Part A
-- [Use Case Diagram](Documents/SystemProject/UseCase)
-- [Activity Diagrams](Documents/SystemProject/Activity)
+- [Use Case Diagram](Documents/SystemProject/UseCases)
+- [Activity Diagrams](Documents/SystemProject/ActivityCases)
 - [Sequence Diagrams](Documents/SystemProject/Sequence)
 
 ### Part B

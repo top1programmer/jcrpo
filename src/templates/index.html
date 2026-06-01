@@ -28,6 +28,12 @@
                     Выйти
                 </a>
 
+                {% if request.session.get("user").role == "moderator" %}
+                <a href="/duplicates">
+                    Дубликаты
+                </a>
+                {% endif %}
+
                 {% else %}
 
                 <a href="/login">
@@ -98,7 +104,11 @@
                         Редактировать
                     </a>
 
-                    <form method="post" action="/jokes/{{ j.id }}/delete">
+                    <form
+                        method="post"
+                        action="/jokes/{{ j.id }}/delete"
+                        onsubmit="return confirm('Удалить анекдот? Это действие нельзя отменить.');"
+                    >
                         <button type="submit">
                             Удалить
                         </button>
@@ -151,7 +161,7 @@
                     div.className = "joke";
                     
                 const tags = (j.tags || []).map(t =>
-                    `<a href="/?tag=${t.name}" class="tag">${t.name}</a>`
+                    `<a href="/?tag=${encodeURIComponent(t.name)}" class="tag">${escapeHtml(t.name)}</a>`
                 ).join(" ");
 
                     div.innerHTML = `
@@ -184,11 +194,13 @@
 
                 const block = document.getElementById("random");
 
-                block.innerHTML = `
-        <div class="joke">
-            <p>${data.text}</p>
-        </div>
-    `;
+                block.innerHTML = "";
+                const div = document.createElement("div");
+                div.className = "joke";
+                const p = document.createElement("p");
+                p.textContent = data.text || "";
+                div.appendChild(p);
+                block.appendChild(div);
             }
         </script>
     </div>

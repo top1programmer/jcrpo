@@ -12,12 +12,13 @@
 
     <h1>Редактирование</h1>
 
-    <form method="post">
+    <form method="post" id="edit-form">
 
         <textarea
             name="text"
             rows="10"
             required
+            id="joke-text"
         >{{ joke.text }}</textarea>
 
         <button type="submit">
@@ -31,6 +32,20 @@
     </form>
 
 </div>
+
+<script>
+    const editForm = document.getElementById("edit-form");
+    const jokeText = document.getElementById("joke-text");
+    const initialText = jokeText.value;
+
+    editForm.addEventListener("submit", function (event) {
+        const textWasChanged = jokeText.value !== initialText;
+
+        if (textWasChanged && !confirm("Сохранить изменения анекдота?")) {
+            event.preventDefault();
+        }
+    });
+</script>
 
 </body>
 </html>

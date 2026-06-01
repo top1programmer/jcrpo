@@ -1,7 +1,6 @@
-#models.py
-from sqlalchemy import Column, Integer, String, Text, Float, Date, ForeignKey, TIMESTAMP
+from sqlalchemy import BigInteger, Boolean, Column, Date, Float, ForeignKey, Integer, String, Text, TIMESTAMP
 from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy import Boolean
+
 
 Base = declarative_base()
 
@@ -11,18 +10,28 @@ class Joke(Base):
 
     id = Column(Integer, primary_key=True)
     text = Column(Text, nullable=False)
-    tags_generated = Column(Boolean, default=False)
+    source_id = Column(BigInteger, unique=True)
     source_date = Column(Date)
     source_rating = Column(Float)
+    has_source_rating = Column(Boolean, default=False)
 
     avg_rating = Column(Float, default=0)
     ratings_count = Column(Integer, default=0)
-
     created_at = Column(TIMESTAMP)
+
+    canonical_id = Column(Integer)
+    duplicate_cluster_id = Column(Integer)
+    tags_generated = Column(Boolean, default=False)
 
     author_id = Column(Integer, ForeignKey("users.id"))
 
     tags = relationship("Tag", secondary="joke_tags", back_populates="jokes")
+
+    @property
+    def final_rating(self):
+        if self.has_source_rating and self.source_rating is not None:
+            return self.source_rating
+        return self.avg_rating or 0
 
 
 class Tag(Base):
@@ -40,6 +49,7 @@ class JokeTag(Base):
     joke_id = Column(Integer, ForeignKey("jokes.id"), primary_key=True)
     tag_id = Column(Integer, ForeignKey("tags.id"), primary_key=True)
 
+
 class User(Base):
     __tablename__ = "users"
 
@@ -49,5 +59,3 @@ class User(Base):
     role = Column(String, default="user")
 
     jokes = relationship("Joke", backref="author")
-
-    

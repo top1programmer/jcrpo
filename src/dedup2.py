@@ -1,8 +1,22 @@
-import psycopg2
-import numpy as np
-from collections import defaultdict
 import ast
+from collections import defaultdict
+from datetime import datetime
+from time import perf_counter
+
 import numpy as np
+import psycopg2
+
+try:
+    from src.settings import DB_CONFIG
+except ModuleNotFoundError:
+    from settings import DB_CONFIG
+
+
+SIM_THRESHOLD = 0.88
+PROGRESS_STEP = 10
+USE_TRIGRAM_CANDIDATES = False
+TRIGRAM_THRESHOLD = 0.2
+
 
 def parse_embedding(emb):
     if emb is None:
@@ -17,34 +31,21 @@ def parse_embedding(emb):
     return None
 
 
-DB_CONFIG = {
-    "dbname": "jokes",
-    "user": "postgres",
-    "password": "postgres",
-    "host": "localhost",
-    "port": 5433
-}
-
-
-# ----------------------------
-# DB
-# ----------------------------
-
 def get_conn():
     return psycopg2.connect(**DB_CONFIG)
 
 
-# ----------------------------
-# cosine similarity
-# ----------------------------
+def log(message):
+    now = datetime.now().strftime("%H:%M:%S")
+    print(f"[{now}] {message}", flush=True)
+
 
 def cosine(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom == 0:
+        return 0
+    return np.dot(a, b) / denom
 
-
-# ----------------------------
-# DSU (Union-Find)
-# ----------------------------
 
 class DSU:
     def __init__(self):
@@ -63,60 +64,100 @@ class DSU:
             self.parent[rb] = ra
 
 
-# ----------------------------
-# candidate search (trigram + vector)
-# ----------------------------
-
-def find_candidates(conn, text, emb):
+def find_candidates(conn, joke_id, text, emb, verbose=False):
     cur = conn.cursor()
+    trigram_candidates = []
 
+    if USE_TRIGRAM_CANDIDATES:
+        if verbose:
+            log(f"  Joke {joke_id}: trigram candidate query started")
+
+        started_at = perf_counter()
+        cur.execute(f"SET LOCAL pg_trgm.similarity_threshold = {TRIGRAM_THRESHOLD}")
+        cur.execute("""
+            SELECT id, text, embedding
+            FROM jokes
+            WHERE id > %s
+              AND text %% %s::text
+            ORDER BY similarity(text, %s::text) DESC
+            LIMIT 50
+        """, (joke_id, text, text))
+
+        trigram_candidates = cur.fetchall()
+        trigram_seconds = perf_counter() - started_at
+
+        if verbose:
+            log(
+                f"  Joke {joke_id}: trigram candidates={len(trigram_candidates)} "
+                f"in {trigram_seconds:.2f}s"
+            )
+    elif verbose:
+        log(f"  Joke {joke_id}: trigram candidate query skipped")
+
+    if verbose:
+        log(f"  Joke {joke_id}: vector candidate query started")
+
+    started_at = perf_counter()
     cur.execute("""
         SELECT id, text, embedding
         FROM jokes
-        ORDER BY similarity(text, %s::text) DESC
-        LIMIT 50
-    """, (text,))
-
-    trigram_candidates = cur.fetchall()
-
-    cur.execute("""
-        SELECT id, text, embedding
-        FROM jokes
-        WHERE embedding IS NOT NULL
+        WHERE embedding IS NOT NULL AND id > %s
         ORDER BY embedding <=> %s::vector
         LIMIT 50
-    """, (emb.tolist(),))
+    """, (joke_id, emb.tolist()))
 
     vector_candidates = cur.fetchall()
+    vector_seconds = perf_counter() - started_at
+
+    if verbose:
+        log(
+            f"  Joke {joke_id}: vector candidates={len(vector_candidates)} "
+            f"in {vector_seconds:.2f}s"
+        )
 
     cur.close()
 
     return {c[0]: c for c in trigram_candidates + vector_candidates}
 
-# ----------------------------
-# build duplicate pairs
-# ----------------------------
 
 def detect_duplicates():
+    log("Connecting to database")
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("SELECT id, text, embedding FROM jokes WHERE embedding IS NOT NULL")
+    log("Loading jokes with embeddings")
+    cur.execute("SELECT id, text, embedding FROM jokes WHERE embedding IS NOT NULL ORDER BY id")
     jokes = cur.fetchall()
+    cur.close()
 
-    print(f"Loaded: {len(jokes)}")
+    total = len(jokes)
+    log(f"Loaded jokes with embeddings: {total}")
+    log(f"Similarity threshold: {SIM_THRESHOLD}")
+    log(f"Trigram candidates enabled: {USE_TRIGRAM_CANDIDATES}")
 
     duplicates = []
+    skipped = 0
+    checked_candidates = 0
 
-    for jid, text, emb in jokes:
+    for index, (jid, text, emb) in enumerate(jokes, start=1):
+        verbose = index <= 5 or index % PROGRESS_STEP == 0
+
+        if verbose:
+            log(f"Processing joke {index}/{total}: id={jid}")
 
         vec = parse_embedding(emb)
 
-        candidates = find_candidates(conn, text, vec)
+        if vec is None:
+            skipped += 1
+            if verbose:
+                log(f"  Joke {jid}: skipped because embedding could not be parsed")
+            continue
+
+        candidates = find_candidates(conn, jid, text, vec, verbose=verbose)
+        checked_candidates += len(candidates)
 
         for id2, text2, emb2 in candidates.values():
-
-            if id2 == jid or emb2 is None:
+            if emb2 is None:
                 continue
 
             vec2 = parse_embedding(emb2)
@@ -126,19 +167,29 @@ def detect_duplicates():
 
             sim = cosine(vec, vec2)
 
-            if sim > 0.88:
+            if sim > SIM_THRESHOLD:
                 duplicates.append((jid, id2, sim))
+                log(
+                    f"Duplicate candidate: {jid} ~ {id2}, "
+                    f"similarity={sim:.3f}, total_pairs={len(duplicates)}"
+                )
+
+        if index % PROGRESS_STEP == 0 or index == total:
+            percent = (index / total * 100) if total else 100
+            log(
+                f"Processed {index}/{total} ({percent:.1f}%). "
+                f"Candidates checked: {checked_candidates}. "
+                f"Duplicate pairs: {len(duplicates)}. "
+                f"Skipped embeddings: {skipped}."
+            )
 
     conn.close()
-
+    log("Duplicate detection finished")
     return duplicates
 
 
-# ----------------------------
-# build clusters
-# ----------------------------
-
 def build_clusters(dups):
+    log("Building duplicate clusters")
     dsu = DSU()
 
     for a, b, _ in dups:
@@ -151,18 +202,14 @@ def build_clusters(dups):
         clusters[root].append(a)
         clusters[root].append(b)
 
-    # unique ids in cluster
-    return [list(set(v)) for v in clusters.values()]
+    result = [list(set(v)) for v in clusters.values()]
+    log(f"Built clusters: {len(result)}")
+    return result
 
-
-# ----------------------------
-# choose canonical
-# ----------------------------
 
 def choose_canonical(conn, cluster):
     cur = conn.cursor()
 
-    # берем самый “лучший” анекдот
     cur.execute("""
         SELECT id
         FROM jokes
@@ -177,19 +224,36 @@ def choose_canonical(conn, cluster):
     return canonical
 
 
-# ----------------------------
-# save results
-# ----------------------------
-
 def save_clusters(clusters):
+    log("Clearing previous duplicate marks")
     conn = get_conn()
     cur = conn.cursor()
 
+    cur.execute("""
+        UPDATE jokes
+        SET canonical_id = NULL,
+            duplicate_cluster_id = NULL
+        WHERE canonical_id IS NOT NULL
+           OR duplicate_cluster_id IS NOT NULL
+    """)
+    log(f"Cleared rows: {cur.rowcount}")
+
+    if not clusters:
+        log("No clusters to save")
+        conn.commit()
+        cur.close()
+        conn.close()
+        return
+
+    log("Saving clusters to database")
     cluster_id = 1
 
     for cluster in clusters:
-
         canonical = choose_canonical(conn, cluster)
+        log(
+            f"Saving cluster {cluster_id}/{len(clusters)}: "
+            f"canonical_id={canonical}, jokes={len(cluster)}"
+        )
 
         for joke_id in cluster:
             cur.execute("""
@@ -204,28 +268,22 @@ def save_clusters(clusters):
     conn.commit()
     cur.close()
     conn.close()
+    log("Clusters saved")
 
-
-# ----------------------------
-# main pipeline
-# ----------------------------
 
 def main():
+    log("Starting duplicate search")
     dups = detect_duplicates()
 
-    print(f"Duplicate pairs: {len(dups)}")
+    log(f"Duplicate pairs found: {len(dups)}")
 
     clusters = build_clusters(dups)
 
-    print(f"Clusters: {len(clusters)}")
-
-    conn = get_conn()
+    log(f"Clusters ready to save: {len(clusters)}")
 
     save_clusters(clusters)
 
-    conn.close()
-
-    print("DONE ✅")
+    log("DONE")
 
 
 if __name__ == "__main__":

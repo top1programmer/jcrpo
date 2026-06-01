@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Дубликаты</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Дубликаты</h1>
+
+            <div class="user-panel">
+                <a href="/">Home</a>
+            </div>
+        </header>
+
+        {% if not groups %}
+        <div class="joke">
+            <p>Группы дубликатов не найдены.</p>
+        </div>
+        {% endif %}
+
+        {% for group in groups %}
+        <section class="duplicate-group">
+            <div class="duplicate-group-header">
+                <h2>Группа {{ group.id }}</h2>
+                <span>{{ group.jokes | length }} анекдота</span>
+            </div>
+
+            <form
+                method="post"
+                action="/duplicates/{{ group.id }}/resolve"
+                onsubmit="return confirm('Оставить выбранный анекдот и удалить остальные из этой группы?');"
+            >
+                <div class="duplicate-list">
+                    {% for joke in group.jokes %}
+                    <label class="duplicate-item">
+                        <input
+                            type="radio"
+                            name="keep_joke_id"
+                            value="{{ joke.id }}"
+                            {% if joke.id == group.canonical_id %}checked{% endif %}
+                            required
+                        >
+
+                        <span class="duplicate-meta">
+                            ID {{ joke.id }}
+                            {% if joke.id == group.canonical_id %}
+                            <strong>оставить сейчас</strong>
+                            {% endif %}
+                        </span>
+
+                        <span class="duplicate-text">{{ joke.text }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+
+                <button type="submit" class="danger-button">
+                    Удалить остальные
+                </button>
+            </form>
+        </section>
+        {% endfor %}
+    </div>
+</body>
+
+</html>

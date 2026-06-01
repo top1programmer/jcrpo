@@ -1,22 +1,20 @@
+import psycopg2
 import requests
 from bs4 import BeautifulSoup
-import psycopg2
-import time
 
-DB_CONFIG = {
-    "dbname": "jokes",
-    "user": "postgres",
-    "password": "postgres",
-    "host": "localhost",
-    "port": 5433
-}
+try:
+    from src.settings import DB_CONFIG
+except ModuleNotFoundError:
+    from settings import DB_CONFIG
+
 
 BASE_URL = "https://www.anekdot.ru/release/anekdot/day/{}/"
+HEADERS = {"User-Agent": "JokeHub educational parser/1.0"}
 
 
 def init_db():
     conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()    
+    cur = conn.cursor()
     cur.execute("""
     CREATE TABLE IF NOT EXISTS jokes (
         id SERIAL PRIMARY KEY,
@@ -26,6 +24,10 @@ def init_db():
         source_rating FLOAT,
         avg_rating FLOAT DEFAULT 0,
         ratings_count INT DEFAULT 0,
+        has_source_rating BOOLEAN DEFAULT FALSE,
+        canonical_id INT,
+        duplicate_cluster_id INT,
+        tags_generated BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
@@ -40,14 +42,13 @@ def parse_day(date_str):
     print(f"Парсим: {date_str}")
 
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
     except Exception as e:
         print("Ошибка запроса:", e)
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
-
     jokes = []
 
     for block in soup.find_all("div", class_="topicbox"):
@@ -55,14 +56,17 @@ def parse_day(date_str):
         if not text_div:
             continue
 
-        text = text_div.get_text(strip=True)
+        text = text_div.get_text(" ", strip=True)
         source_id = block.get("data-id")
+
+        if not text or not source_id:
+            continue
 
         star_tag = block.find("a", class_="user-star")
         stars = star_tag.get_text().count("★") if star_tag else None
         has_rating = stars is not None
         source_rating = float(stars) if stars is not None else None
-        #print(f"text: {text}, stars: {stars}, source: {source_rating}")
+
         jokes.append((text, source_id, date_str, source_rating, has_rating))
 
     return jokes
